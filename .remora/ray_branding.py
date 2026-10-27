@@ -88,6 +88,21 @@ validate_staple() {
 
 rewrite(root / "packaging/macos/package.sh", mac_package)
 
+# EffectCraft renders its upstream SVG during packaging rather than copying a
+# prepared TIFF. Make it use the same personalized Ray background as the rest.
+if old_title == "EffectCraft":
+    def use_ray_background(text: str) -> str:
+        start = text.find("# The background is rendered from its SVG")
+        end = text.find('cp "$HERE/dmg/dmg-layout.DS_Store"', start)
+        if start < 0 or end < 0:
+            raise SystemExit("EffectCraft DMG renderer changed upstream")
+        return (text[:start] + '# Personalized Ray background, generated during prepare.py.\n'
+                + 'mkdir -p "$STAGE/.background"\n'
+                + 'cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"\n'
+                + text[end:])
+
+    rewrite(root / "packaging/macos/package.sh", use_ray_background)
+
 # Keep the Finder icon position and background alias in sync with the new
 # .app folder and volume name. This runs only on the Mac CI job.
 dmg_generator = root / "packaging/macos/dmg/generate.py"
@@ -106,6 +121,12 @@ if dmg_generator.is_file():
         layout_dir = dmg_generator.parent
         layout_name = "DS_Store" if (layout_dir / "DS_Store").is_file() else "dmg-layout.DS_Store"
         runpy.run_path(str(dmg_generator))["write_ds_store"](str(layout_dir / layout_name))
+
+    # The upstream DMG artwork contains the old Craft title and upstream art.
+    # Render the Ray background from the same personalized icon as the app.
+    import subprocess
+    subprocess.run([sys.executable, str(root / ".remora/dmg_background.py"),
+                    old_title, new_title, str(root)], check=True)
 
 
 def windows_package(text: str) -> str:
