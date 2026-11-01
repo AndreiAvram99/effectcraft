@@ -84,9 +84,9 @@ pub struct Renderer<'a> {
     opacity_mul: f32,
     /// Collapsed precomp: nested 3D layers join the parent's 3D space.
     pub(crate) collapse3d: Option<Collapse3d<'a>>,
-    /// Switches inherited from the precomp layers this comp is rendered through (see
-    /// [`RenderOpts::nested_switches`]): the worst quality and whether motion blur is allowed.
-    pub(crate) inherited: Option<(Quality, bool)>,
+    /// Quality inherited from the precomp layers this comp is rendered through (see
+    /// [`RenderOpts::nested_switches`]): the worst of them.
+    pub(crate) inherited: Option<Quality>,
     /// Classic 3D depth of field is left to an accelerator ([`three_d::Plane3d::dof`]).
     pub(crate) defer_dof: bool,
     /// This renderer draws into the top-level frame's canvas (the top comp, or a collapsed
@@ -97,6 +97,11 @@ pub struct Renderer<'a> {
     through: [Option<Through<'a>>; MAX_THROUGH],
     /// More collapsed levels than [`MAX_THROUGH`]: their motion is not blurred.
     through_lost: bool,
+    /// Seconds of this comp's time per second of the rendered frame's time: the product of the
+    /// time-stretch / time-remap rates of the (non-collapsed) precomp layers it is rendered
+    /// through. Motion blur opens the shutter over the rendered frame, so a nested comp shown at
+    /// 75 % stretch spans 1/0.75 of its shutter in its own time (as After Effects does).
+    pub(crate) time_rate: f64,
 }
 
 #[cfg(test)]

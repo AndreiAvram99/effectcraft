@@ -41,6 +41,7 @@ cpal or muda. Everything in L0 to L4, the egui UI and the web app also build for
 | L3 | `gpu` | The GPU compositor and GPU effects on wgpu compute shaders (Metal, Vulkan, Direct3D 12, WebGPU), checked against the CPU renderer |
 | L3 | `sam2` | SAM 2.1 image segmentation and video object tracking for Roto Brush, with candle CPU inference and optional wgpu acceleration; native only, empty on wasm32, with user-installed weights |
 | L3 | `interchange` | Premiere Pro interop through timeline interchange (FCP7 XML, FCPXML, OTIO, EDL, AAF, OMF via FilmCraft's `filmcraft-interchange`): sequences ↔ compositions (§6a) |
+| L3 | `aep` | After Effects projects in one crate (like `lottie`): `container` reads and writes the `.aep` container (RIFX `Egg!`) as a lossless chunk tree with a byte-identical round trip, bounded for hostile input, reads the `.aepx` XML form into the same tree, and has a typed view of items, layers, properties, effects, masks, shapes, text, markers, footage, cameras, lights and layer styles, from our own observations of generated files ([aep-format.md](aep-format.md)); `import` maps the typed view into a project (items, settings, compositions, every layer kind, Transform, keyframes, expressions, masks, text, shapes, cameras, lights, mattes, markers, time remapping, layer styles, the effects of the importer's table, footage) with a report of everything not imported ([aep-import.md](aep-import.md)) |
 | L3 | `lottie` | Lottie JSON / dotLottie import and export (layers, precomps, eased and spatial keyframes, shapes, masks, mattes) with a warnings list for what Lottie cannot express |
 | L3 | `plugin` | Effect plug-ins: loads sandboxed WebAssembly effect modules (plug-in API v1; the wasmi interpreter behind the `wasm` feature, on for native hosts) into the effect registry ([plugins.md](plugins.md)) |
 | L4 | `engine` | `Session`: project, branching undo history, editor state, the command registry and menus, the ScriptUI window model (`scriptui`) |
@@ -302,7 +303,7 @@ and colour-space conversions run on the GPU. Classic 3D runs composite on the GP
 (`gpu::classic3d`): the render crate prepares the planes (`Renderer::prepare_3d_run`: layer buffers
 with their bokeh depth of field, homographies per motion-blur sub-sample, materials, lights, track
 mattes), the GPU packs the buffers into one atlas texture and one kernel does the per-pixel
-fragment sort (intersecting planes, coplanar stack order), Blinn-Phong lighting, ray-cast shadows
+fragment sort (intersecting planes, coplanar stack order), Phong lighting, ray-cast shadows
 against the caster planes (Shadow Diffusion, Light Transmission) and blending. Adjustment layers
 run their effect stacks on the GPU-resident comp (`Renderer::run_effects_on` with an `FxTarget`):
 runs of GPU effects stay on the device and only non-GPU effects read back and upload. Advanced 3D
@@ -438,10 +439,14 @@ one with **Preserve resolution when nested** renders at full size inside a comp 
 resolution (the buffer's scale places it).
 
 **Motion blur** has one gate, `Renderer::mb_on`: the render options (Render Settings ▸ Motion
-Blur, previews), the comp's switch and the layer's switch, limited by the precomp layers above
-when switches affect nested comps. Layer motion, mask motion blur (the comp's Samples Per Frame,
+Blur, previews), the comp's switch and the layer's switch. A precomp layer's switch off does not
+turn off motion blur inside the nested comp (only Quality passes down when switches affect nested
+comps). Layer motion, mask motion blur (the comp's Samples Per Frame,
 four in Draft), effects that read the shutter and Advanced 3D all follow it, and the layer cache
-key of a layer with masks or effects records it.
+key of a layer with masks or effects records it. The shutter opens over the rendered frame: a comp
+shown through a time-stretched or time-remapped precomp layer spans its shutter in its own time
+times `Renderer::time_rate` (the product of the precomp layers' source rates, `EvalCtx::source_rate`),
+so at 50 % stretch one frame's shutter covers twice the nested comp's own.
 
 **Motion tracking** (Animation ▸ Track Motion / Stabilize Motion, Window ▸ Tracker): a tracker
 is a `Tracker` group under the layer's Motion Trackers group, with Track Point groups (Feature

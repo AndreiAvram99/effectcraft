@@ -295,6 +295,28 @@ fn falloff_inverse_square_clamped() {
     assert_eq!(ls.attenuation(vec3(250.0, 0.0, 0.0)), 0.0);
 }
 
+#[test]
+fn parallel_light_falls_off_from_its_position() {
+    // The rays keep the light's direction, but Smooth falloff is measured from its position.
+    let mut ls = LightState::from_layer(&crate::EvalCtx::new(&Project::default(), ItemId(0), &Comp::new(W, H, FrameRate::FPS_30, Tick::ZERO), Tick::ZERO), &{
+        let (mut p, _, comp) = setup();
+        light(&mut p, &comp, LightKind::Parallel, [0.0, 0.0, 0.0])
+    })
+    .unwrap();
+    assert!(ls.to_light(vec3(0.0, 0.0, 500.0)).1.is_infinite());
+    ls.falloff = 1;
+    ls.radius = 100.0;
+    ls.falloff_distance = 100.0;
+    let p = ls.pos;
+    assert_eq!(ls.attenuation(p + vec3(0.0, 0.0, 50.0)), 1.0);
+    assert!((ls.attenuation(p + vec3(0.0, 0.0, 150.0)) - 0.5).abs() < 1e-12);
+    // Off to the side counts too: the distance is from the position, not along the rays.
+    assert!((ls.attenuation(p + vec3(150.0, 0.0, 0.0)) - 0.5).abs() < 1e-12);
+    assert_eq!(ls.attenuation(p + vec3(0.0, 250.0, 0.0)), 0.0);
+    ls.falloff = 0;
+    assert_eq!(ls.attenuation(p + vec3(0.0, 0.0, 5000.0)), 1.0);
+}
+
 // ---------------------------------------------------------------- shadows
 
 #[test]
@@ -440,7 +462,7 @@ fn depth_of_field_blurs_out_of_focus_layers() {
     let (mut p, cid, comp) = setup();
     let mut cam = camera(&mut p, &comp);
     set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-    set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0));
+    set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0 / crate::three_d::camera::APERTURE_BLUR_SCALE));
     let s = solid3(&mut p, &comp, [1.0, 1.0, 1.0], 60, 60, [100.0, 50.0, 0.0]);
     push(&mut p, cid, cam);
     push(&mut p, cid, s);
@@ -455,6 +477,28 @@ fn depth_of_field_blurs_out_of_focus_layers() {
     assert!(b.get(66, 50)[3] > 0.01);
 }
 
+#[test]
+fn blur_aperture_scales_with_zoom_over_focus() {
+    // The circle of confusion on the plane in focus shows zoom / focus times larger on screen:
+    // doubling the focus distance halves the blur aperture; doubling the zoom doubles it.
+    let (mut p, cid, comp) = setup();
+    let mut cam = camera(&mut p, &comp);
+    set(&mut cam, "cameraOptions/dof", Value::Bool(true));
+    set(&mut cam, "cameraOptions/aperture", Value::Scalar(100.0));
+    let dof_at = |cam: &Layer, focus: f64| {
+        let mut cam = cam.clone();
+        set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(focus));
+        let c = p.comp(cid).unwrap();
+        camera::layer_camera(&crate::EvalCtx::new(&p, cid, c, Tick::ZERO), &cam).dof.unwrap()
+    };
+    let near = dof_at(&cam, zoom());
+    assert!(close(near.aperture as f32, (100.0 * camera::APERTURE_BLUR_SCALE) as f32, 1e-6), "{}", near.aperture);
+    assert!(close(dof_at(&cam, 2.0 * zoom()).aperture as f32, near.aperture as f32 * 0.5, 1e-6));
+    set(&mut cam, "cameraOptions/zoom", Value::Scalar(2.0 * zoom()));
+    assert!(close(dof_at(&cam, zoom()).aperture as f32, near.aperture as f32 * 2.0, 1e-6));
+    assert_eq!(camera::blur_aperture(100.0, zoom(), zoom()), near.aperture);
+}
+
 /// A non-finite Focus Distance doesn't reach the blur: the camera focuses on the property's
 /// default plane (`zoom`) instead.
 #[test]
@@ -463,7 +507,7 @@ fn dof_falls_back_when_focus_distance_is_not_finite() {
         let (mut p, cid, comp) = setup();
         let mut cam = camera(&mut p, &comp);
         set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-        set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0));
+        set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0 / camera::APERTURE_BLUR_SCALE));
         set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(bad));
         let s = solid3(&mut p, &comp, [1.0, 1.0, 1.0], 60, 60, [100.0, 50.0, 0.0]);
         push(&mut p, cid, cam);
@@ -489,7 +533,8 @@ fn dof_blur_radius_is_bounded_for_degenerate_inputs() {
         let (mut p, cid, comp) = setup();
         let mut cam = camera(&mut p, &comp);
         set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-        set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0));
+        // A 60 px blur aperture at this focus.
+        set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0 / camera::blur_aperture(1.0, zoom(), focus)));
         set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(focus));
         let mut s = solid3(&mut p, &comp, [1.0, 1.0, 1.0], 60, 60, [100.0, 50.0, 0.0]);
         set(&mut s, "transform/scale", Value::Vec3([scale, scale, 100.0]));
@@ -518,7 +563,8 @@ fn dof_radii_skip_degenerate_planes_and_respect_the_cap() {
         let (mut p, cid, comp) = setup();
         let mut cam = camera(&mut p, &comp);
         set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-        set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0));
+        // A 60 px blur aperture at this focus.
+        set(&mut cam, "cameraOptions/aperture", Value::Scalar(60.0 / camera::blur_aperture(1.0, zoom(), focus)));
         set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(focus));
         let mut s = solid3(&mut p, &comp, [1.0, 1.0, 1.0], 60, 60, [100.0, 50.0, 0.0]);
         set(&mut s, "transform/scale", Value::Vec3([scale, scale, 100.0]));
@@ -547,9 +593,11 @@ fn dof_blur_is_independent_of_layer_scale() {
         let zoom = 800.0 * 50.0 / 36.0;
         let mut cam = camera(&mut p, &comp);
         set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-        set(&mut cam, "cameraOptions/aperture", Value::Scalar(200.0));
-        // coc = aperture·|z − f| / z: a 40 px comp radius on the z = 0 plane (depth = zoom).
-        set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(zoom + 2.0 * 40.0 * zoom / 200.0));
+        // coc = aperture·|z − f| / z with a 200 px blur aperture: a 40 px comp radius on the z = 0
+        // plane (depth = zoom).
+        let focus = zoom + 2.0 * 40.0 * zoom / 200.0;
+        set(&mut cam, "cameraOptions/aperture", Value::Scalar(200.0 / camera::blur_aperture(1.0, zoom, focus)));
+        set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(focus));
         let mut s = solid3(&mut p, &comp, [1.0, 1.0, 1.0], w, h, [400.0, 200.0, 0.0]);
         set(&mut s, "transform/scale", Value::Vec3([scale, scale, 100.0]));
         push(&mut p, cid, cam);
@@ -570,7 +618,8 @@ fn dof_blur_matches_across_render_resolutions() {
     let zoom = 800.0 * 50.0 / 36.0;
     let mut cam = camera(&mut p, &comp);
     set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-    set(&mut cam, "cameraOptions/aperture", Value::Scalar(200.0));
+    // A 200 px blur aperture at this focus.
+    set(&mut cam, "cameraOptions/aperture", Value::Scalar(200.0 / camera::blur_aperture(1.0, zoom, 2.0 * zoom)));
     set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(2.0 * zoom));
     let s = solid3(&mut p, &comp, [1.0, 1.0, 1.0], 400, 100, [400.0, 200.0, 0.0]);
     push(&mut p, cid, cam);
@@ -611,7 +660,7 @@ fn tilted_layer_blurs_progressively_with_depth() {
     let (mut p, cid, comp) = setup();
     let mut cam = camera(&mut p, &comp);
     set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-    set(&mut cam, "cameraOptions/aperture", Value::Scalar(80.0));
+    set(&mut cam, "cameraOptions/aperture", Value::Scalar(80.0 / crate::three_d::camera::APERTURE_BLUR_SCALE));
     set(&mut cam, "cameraOptions/irisShape", Value::Enum(4)); // Hexagon
     let mut s = solid3(&mut p, &comp, [1.0, 1.0, 1.0], 160, 40, [100.0, 50.0, 0.0]);
     set(&mut s, "transform/rotationY", Value::Scalar(60.0));
@@ -635,7 +684,8 @@ fn iris_shape_and_highlights_shape_the_bokeh() {
         let (mut p, cid, comp) = setup();
         let mut cam = camera(&mut p, &comp);
         set(&mut cam, "cameraOptions/dof", Value::Bool(true));
-        set(&mut cam, "cameraOptions/aperture", Value::Scalar(120.0));
+        // A 120 px blur aperture at this zoom and focus.
+        set(&mut cam, "cameraOptions/aperture", Value::Scalar(120.0 / crate::three_d::camera::blur_aperture(1.0, zoom(), zoom() * 0.5)));
         set(&mut cam, "cameraOptions/focusDistance", Value::Scalar(zoom() * 0.5));
         set(&mut cam, "cameraOptions/irisShape", Value::Enum(shape));
         set(&mut cam, "cameraOptions/highlightGain", Value::Scalar(gain));
@@ -718,4 +768,41 @@ fn rig_orbit_keeps_distance_and_pan_moves_both() {
     r.orbit(0.0, 500.0);
     let off = r.eye - r.poi;
     assert!(off.y.abs() / off.length() < 0.9999);
+}
+
+/// The specular highlight is Phong, `(R·V)^shininess`: After Effects' highlight on lit 3D layers
+/// of a production project (a parallel light along the view axis, low Shininess, Metal 100 %)
+/// narrows towards the frame edges as the mirrored light leaves the view direction; the Blinn
+/// `(N·H)` lobe, whose angle is half as wide, left off-axis layers up to 6 % brighter than After
+/// Effects' render.
+#[test]
+fn specular_is_the_phong_lobe() {
+    use super::light::{LightState, Material, shade};
+    let light = |dir: Vec3| LightState {
+        kind: LightKind::Parallel,
+        pos: vec3(0.0, 0.0, -1000.0),
+        dir,
+        color: [1.0; 3],
+        cone_half: 0.0,
+        feather: 0.0,
+        falloff: 0,
+        radius: 0.0,
+        falloff_distance: 0.0,
+        casts_shadows: false,
+        shadow_darkness: 1.0,
+        shadow_diffusion: 0.0,
+    };
+    // Specular only, white, exponent 4 (Shininess 25 %), no metal tint.
+    let mat = Material { ambient: 0.0, diffuse: 0.0, specular: 1.0, shininess: 0.25, metal: 0.0, ..Material::default() };
+    let n = vec3(0.0, 0.0, -1.0);
+    // Light 30° off the normal, viewer on the normal: R·V = cos 30°, while N·H would be cos 15°.
+    let t = 30f64.to_radians();
+    let lv = vec3(t.sin(), 0.0, -t.cos());
+    let (out, _) = shade([1.0; 3], vec3(0.0, 0.0, 0.0), n, vec3(0.0, 0.0, -1.0), &mat, &[light(-lv)], &|_, _| [1.0; 3]);
+    let want = t.cos().powi(4) as f32;
+    assert!((out[0] - want).abs() < 1e-5, "{} vs Phong {want} (Blinn {})", out[0], (t / 2.0).cos().powi(4));
+    // Viewer on the mirror direction: the full highlight.
+    let mirror = vec3(-t.sin(), 0.0, -t.cos());
+    let (out, _) = shade([1.0; 3], vec3(0.0, 0.0, 0.0), n, mirror, &mat, &[light(-lv)], &|_, _| [1.0; 3]);
+    assert!((out[0] - 1.0).abs() < 1e-5, "{}", out[0]);
 }

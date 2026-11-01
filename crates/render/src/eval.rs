@@ -136,6 +136,28 @@ impl<'a> EvalCtx<'a> {
         }
         layer.layer_time(self.time)
     }
+    /// How fast a layer's source time runs against comp time at the context time: 100 / Stretch,
+    /// or the slope of Time Remap (and of Responsive Design time) around it; 1 for an ordinary
+    /// layer.
+    pub fn source_rate(&self, layer: &Layer) -> f64 {
+        let remap = layer.props.get("timeRemap").is_some();
+        let stretched = (layer.stretch - 100.0).abs() > 1e-9;
+        if !remap && !stretched {
+            return 1.0;
+        }
+        if !remap && !matches!(layer.source, LayerSource::Comp { .. }) {
+            return 100.0 / layer.stretch;
+        }
+        // The median slope of three adjacent millisecond intervals around the time: a Hold key's
+        // jump falls in one interval at most, and it is a cut, not a rate. On smooth or piecewise
+        // linear mappings this is the central difference (a kink at the time averages its sides).
+        let h = 1e-3;
+        let at = |dt: f64| self.at(self.time + Tick::from_seconds_f64(dt)).source_time(layer).seconds();
+        let (a, b, c, d) = (at(-1.5 * h), at(-0.5 * h), at(0.5 * h), at(1.5 * h));
+        let (s0, s1, s2) = ((b - a) / h, (c - b) / h, (d - c) / h);
+        s0.max(s1).min(s0.min(s1).max(s2))
+    }
+
     /// The time a precomp layer's nested comp is shown at: [`Self::source_time`], floored to
     /// the nested comp's own frames when it preserves its frame rate (Composition Settings ▸
     /// Preserve frame rate when nested or in render queue).

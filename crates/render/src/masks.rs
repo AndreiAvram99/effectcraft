@@ -13,13 +13,15 @@ use crate::eval::EvalCtx;
 /// What mask motion blur may do in a render (from the renderer's motion blur gate).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MaskBlur {
-    /// Motion blur is on in this render: the render options, the comp's switch and the Motion
-    /// Blur switches of the precomp layers above (when switches affect nested comps).
+    /// Motion blur is on in this render: the render options and the comp's switch.
     pub allowed: bool,
-    /// The layer's own Motion Blur switch, as those precomp layers limit it (Same As Layer).
+    /// The layer's own Motion Blur switch (Same As Layer).
     pub layer: bool,
     /// Sub-frame samples (the comp's Samples Per Frame; fewer in Draft).
     pub samples: usize,
+    /// The comp's time rate (see `Renderer::time_rate`): the shutter spans this many frames of
+    /// the comp's own time per frame rendered.
+    pub time_rate: f64,
 }
 
 /// Coverage of one mask in buffer pixels (before mode/opacity/invert). With mask motion blur
@@ -37,7 +39,7 @@ fn coverage(ctx: &EvalCtx, layer: &Layer, g: &effectcraft_project::PropGroup, bu
         };
     let animated = g.get("path").is_some_and(|p| p.keys.len() > 1 || p.has_expression());
     if mb && animated {
-        let fd = ctx.comp.frame_duration().seconds();
+        let fd = ctx.comp.frame_duration().seconds() * blur.time_rate;
         let (angle, phase) = (ctx.comp.shutter_angle / 360.0, ctx.comp.shutter_phase / 360.0);
         let mut acc: Option<Mask> = None;
         let n = blur.samples.max(2);
